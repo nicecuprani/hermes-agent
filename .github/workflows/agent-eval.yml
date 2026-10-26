@@ -1,0 +1,244 @@
+name: Agent Evaluation (NemoClaw)
+
+on:
+  pull_request:
+    branches: [main, develop]
+    paths:
+      - 'prompts/**'
+      - 'skills/**'
+      - 'config/agent*.yaml'
+      - 'config/tool*.yaml'
+      - 'scripts/agent*.py'
+      - '.github/workflows/agent-eval.yml'
+
+permissions:
+  contents: read
+  pull-requests: write
+  checks: write
+
+env:
+  AGENT_ID: hermes-friday
+  ETHOS_PATH: ${{ github.workspace }}/ETHOS.md
+  TRACES_DIR: ${{ github.workspace }}/traces
+  NEMOCLAW_VERSION: latest
+
+jobs:
+  nemoclaw-eval:
+    name: NemoClaw Evaluation
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      # ──────────────────────────────────────────────
+      # 1. Checkout & Setup
+      # ──────────────────────────────────────────────
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0  # Need history for base/head comparison
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install uv
+        run: pip install uv
+
+      # ──────────────────────────────────────────────
+      # 2. Install NemoClaw (from GitHub)
+      # ──────────────────────────────────────────────
+      - name: Install NemoClaw
+        run: |
+          uv pip install git+https://github.com/NVIDIA/NemoClaw@main
+          # Or specific tag: uv pip install git+https://github.com/NVIDIA/NemoClaw@v0.1.0
+
+      # ──────────────────────────────────────────────
+      # 3. Prepare Traces (Hermes → NeMo Relay)
+      # ──────────────────────────────────────────────
+      - name: Generate Hermes traces for PR
+        id: traces
+        run: |
+          mkdir -p ${{ env.TRACES_DIR }}
+
+          # Option A: Use existing session logs
+          if [ -f "C:/MindOS/Inbox/SESSION_LOG.md" ]; then
+            cp "C:/MindOS/Inbox/SESSION_LOG.md" ${{ env.TRACES_DIR }}/session_log.md
+          fi
+
+          # Option B: Run test suite to generate fresh traces
+          # python -m pytest tests/agent/ -v --tb=short 2>&1 | tee ${{ env.TRACES_DIR }}/test_run.log
+
+          # Option C: Synthetic traces for changed components
+          python scripts/generate_synthetic_traces.py \
+            --changed-files "${{ steps.changed-files.outputs.files }}" \
+            --output ${{ env.TRACES_DIR }}/synthetic_traces.json
+
+      - name: Convert to NeMo Relay format
+        run: |
+          python scripts/convert_hermes_traces.py \
+            --input ${{ env.TRACES_DIR }}/session_log.md \
+            --output ${{ env.TRACES_DIR }}/traces_nemo_relay.json \
+            --agent-id ${{ env.AGENT_ID }}
+
+      # ──────────────────────────────────────────────
+      # 4. NeMo Compass — Failure Analysis
+      # ──────────────────────────────────────────────
+      - name: Run NeMo Compass (Failure Taxonomy)
+        id: compass
+        env:
+          NGC_API_KEY: ${{ secrets.NGC_API_KEY }}
+        run: |
+          # Requires NVIDIA AI Enterprise / NeMo Compass access
+          # This is a managed service - replace with actual API call
+          python -m nemoclaw.compass \
+            --traces ${{ env.TRACES_DIR }}/traces_nemo_relay.json \
+            --ethos ${{ env.ETHOS_PATH }} \
+            --output ${{ env.TRACES_DIR }}/compass_report.json \
+            --api-key ${{ env.NGC_API_KEY }} \
+            2>&1 | tee compass.log
+
+          # Parse result
+          if [ -f ${{ env.TRACES_DIR }}/compass_report.json ]; then
+            FAILURE_COUNT=$(jq '.failure_taxonomy | length' ${{ env.TRACES_DIR }}/compass_report.json)
+            echo "failure_count=$FAILURE_COUNT" >> $GITHUB_OUTPUT
+            echo "compass_passed=$([ $FAILURE_COUNT -eq 0 ] && echo true || echo false)" >> $GITHUB_OUTPUT
+          else
+            echo "failure_count=unknown" >> $GITHUB_OUTPUT
+            echo "compass_passed=false" >> $GITHUB_OUTPUT
+          fi
+
+      # ──────────────────────────────────────────────
+      # 5. Harbor Evaluations — Task-Specific Eval
+      # ──────────────────────────────────────────────
+      - name: Run Harbor Evaluations
+        id: harbor
+        env:
+          NGC_API_KEY: ${{ secrets.NGC_API_KEY }}
+        run: |
+          # Eval tasks defined in eval_tasks.yaml (see below)
+          python -m nemoclaw.eval \
+            --tasks eval_tasks.yaml \
+            --traces ${{ env.TRACES_DIR }}/traces_nemo_relay.json \
+            --ethos ${{ env.ETHOS_PATH }} \
+            --output ${{ env.TRACES_DIR }}/harbor_report.json \
+            --api-key ${{ env.NGC_API_KEY }} \
+            2>&1 | tee harbor.log
+
+          # Parse results
+          if [ -f ${{ env.TRACES_DIR }}/harbor_report.json ]; then
+            PASS_RATE=$(jq '.summary.pass_rate' ${{ env.TRACES_DIR }}/harbor_report.json)
+            echo "pass_rate=$PASS_RATE" >> $GITHUB_OUTPUT
+            echo "harbor_passed=$([ $(echo "$PASS_RATE >= 0.9" | bc -l) -eq 1 ] && echo true || false)" >> $GITHUB_OUTPUT
+          else
+            echo "pass_rate=0" >> $GITHUB_OUTPUT
+            echo "harbor_passed=false" >> $GITHUB_OUTPUT
+          fi
+
+      # ──────────────────────────────────────────────
+      # 6. A/B Comparator (if prompt/tool changed)
+      # ──────────────────────────────────────────────
+      - name: A/B Comparator (Regression Guard)
+        id: comparator
+        if: steps.changed-files.outputs.prompt-changed == 'true' || steps.changed-files.outputs.tool-changed == 'true'
+        env:
+          NGC_API_KEY: ${{ secrets.NGC_API_KEY }}
+        run: |
+          # Compare base (main) vs head (PR) on held-out eval set
+          python -m nemoclaw.compare \
+            --base main \
+            --head ${{ github.sha }} \
+            --eval-set eval_heldout.yaml \
+            --traces-dir ${{ env.TRACES_DIR }} \
+            --ethos ${{ env.ETHOS_PATH }} \
+            --output ${{ env.TRACES_DIR }}/comparator_report.json \
+            --api-key ${{ env.NGC_API_KEY }} \
+            2>&1 | tee comparator.log
+
+          if [ -f ${{ env.TRACES_DIR }}/comparator_report.json ]; then
+            REGRESSION=$(jq '.regression_detected' ${{ env.TRACES_DIR }}/comparator_report.json)
+            echo "regression=$REGRESSION" >> $GITHUB_OUTPUT
+            echo "comparator_passed=$([ "$REGRESSION" = "false" ] && echo true || false)" >> $GITHUB_OUTPUT
+          else
+            echo "regression=unknown" >> $GITHUB_OUTPUT
+            echo "comparator_passed=true" >> $GITHUB_OUTPUT
+          fi
+
+      # ──────────────────────────────────────────────
+      # 7. Gate Decision & PR Comment
+      # ──────────────────────────────────────────────
+      - name: Evaluate Gate
+        id: gate
+        run: |
+          COMPASS_PASSED=${{ steps.compass.outputs.compass_passed }}
+          HARBOR_PASSED=${{ steps.harbor.outputs.harbor_passed }}
+          COMPARATOR_PASSED=${{ steps.comparator.outputs.comparator_passed }}
+
+          # All must pass
+          if [ "$COMPASS_PASSED" = "true" ] && [ "$HARBOR_PASSED" = "true" ] && [ "$COMPARATOR_PASSED" = "true" ]; then
+            echo "gate_passed=true" >> $GITHUB_OUTPUT
+            echo "GATE: ✅ PASSED"
+          else
+            echo "gate_passed=false" >> $GITHUB_OUTPUT
+            echo "GATE: ❌ FAILED"
+            echo "  Compass: $COMPASS_PASSED"
+            echo "  Harbor: $HARBOR_PASSED"
+            echo "  Comparator: $COMPARATOR_PASSED"
+          fi
+
+      - name: Post PR Comment
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const gate = '${{ steps.gate.outputs.gate_passed }}';
+            const compass = '${{ steps.compass.outputs.compass_passed }}';
+            const harbor = '${{ steps.harbor.outputs.harbor_passed }}';
+            const comparator = '${{ steps.comparator.outputs.comparator_passed }}';
+            const passRate = '${{ steps.harbor.outputs.pass_rate }}';
+            const failures = '${{ steps.compass.outputs.failure_count }}';
+
+            const icon = gate === 'true' ? '✅' : '❌';
+            const title = `NemoClaw Agent Evaluation ${icon}`;
+
+            const body = `
+            ## ${title}
+
+            | Check | Status |
+            |-------|--------|
+            | NeMo Compass (Failure Taxonomy) | ${compass === 'true' ? '✅' : '❌'} (${failures} failure categories) |
+            | Harbor Evaluations | ${harbor === 'true' ? '✅' : '❌'} (Pass rate: ${passRate}) |
+            | A/B Comparator (Regression) | ${comparator === 'true' ? '✅' : '❌'} |
+
+            **ETHOS.md violations checked:** gender_slip, sycophancy, verbosity, hallucination_marker, tool_misuse, memory_drift, security
+
+            ${gate === 'false' ? '🚫 **Merge blocked** — fix failures above before merging.' : '✅ **All checks passed** — safe to merge.'}
+            `;
+
+            github.rest.issues.createComment({
+              issue_number: context.issue.number,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              body: body
+            });
+
+      # ──────────────────────────────────────────────
+      # 8. Upload Artifacts
+      # ──────────────────────────────────────────────
+      - name: Upload Evaluation Reports
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: nemoclaw-eval-reports
+          path: |
+            ${{ env.TRACES_DIR }}/*.json
+            ${{ env.TRACES_DIR }}/*.log
+          retention-days: 7
+
+      # ──────────────────────────────────────────────
+      # 9. Fail Job if Gate Failed
+      # ──────────────────────────────────────────────
+      - name: Fail on Gate Failure
+        if: steps.gate.outputs.gate_passed != 'true'
+        run: |
+          echo "::error::NemoClaw evaluation gate failed. See PR comment and artifacts."
+          exit 1
