@@ -11,6 +11,8 @@ on:
       - 'scripts/agent*.py'
       - '.github/workflows/agent-eval.yml'
 
+  workflow_dispatch:
+
 permissions:
   contents: read
   pull-requests: write
