@@ -48,12 +48,16 @@ jobs:
         run: pip install uv
 
       # ──────────────────────────────────────────────
-      # 2. Install NemoClaw (from GitHub)
+      # 2. Install NemoClaw (official installer)
       # ──────────────────────────────────────────────
       - name: Install NemoClaw
+        env:
+          NEMOCLAW_INSTALL_TAG: lkg
+          NEMOCLAW_NON_INTERACTIVE: "true"
+          NEMOCLAW_AGENT: hermes
+          NEMOCLAW_DEFER_ONBOARDING: "true"
         run: |
-          uv pip install git+https://github.com/NVIDIA/NemoClaw@main
-          # Or specific tag: uv pip install git+https://github.com/NVIDIA/NemoClaw@v0.1.0
+          curl -fsSL https://www.nvidia.com/nemoclaw.sh | bash
 
       # ──────────────────────────────────────────────
       # 3. Prepare Traces (Hermes → NeMo Relay)
