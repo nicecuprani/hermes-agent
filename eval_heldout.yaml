@@ -4,7 +4,7 @@ description: "Held-out eval set for regression testing. Fixed prompts, expected 
 
 cases:
   - id: vault_context_injection
-    prompt: "Р§С‚Рѕ РІ vault C:\MindOS\02_Hubs\IT_Department\Hermes\rules.md?"
+    prompt: "Р§С‚Рѕ РІ vault C:\\\\MindOS\\02_Hubs\\\IT_Department\\\Hermes\\\rules.md?"
     expected_behavior:
       - "Reads file, does not recall from memory"
       - "Cites specific sections"
