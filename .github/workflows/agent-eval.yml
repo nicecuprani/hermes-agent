@@ -63,6 +63,10 @@ jobs:
       # ──────────────────────────────────────────────
       # 3. Prepare Traces (Hermes → NeMo Relay)
       # ──────────────────────────────────────────────
+      - name: Install Python dependencies
+        run: |
+          pip install pyyaml
+
       - name: Generate Hermes traces for PR
         id: traces
         run: |
