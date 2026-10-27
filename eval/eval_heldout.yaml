@@ -1,4 +1,3 @@
-﻿yaml
 # eval_heldout.yaml
 version: "1.0"
 description: "Held-out eval set for regression testing. Fixed prompts, expected behaviors."
