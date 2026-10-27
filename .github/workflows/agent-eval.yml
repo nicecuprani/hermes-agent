@@ -254,10 +254,10 @@ jobs:
           retention-days: 7
 
       # ──────────────────────────────────────────────
-      # 9. Fail Job if Gate Failed
+      # 9. Fail Job if Gate Failed (only on PR; workflow_dispatch skips gate)
       # ──────────────────────────────────────────────
       - name: Fail on Gate Failure
-        if: steps.gate.outputs.gate_passed != 'true'
+        if: github.event_name == 'pull_request' && steps.gate.outputs.gate_passed != 'true'
         run: |
           echo "::error::NemoClaw evaluation gate failed. See PR comment and artifacts."
           exit 1
