@@ -48,18 +48,17 @@ jobs:
         run: pip install uv
 
       # ──────────────────────────────────────────────
-      # 2. Install NemoClaw (official installer)
+      # 2. Install NemoClaw (official installer, skip onboarding for CI)
       # ──────────────────────────────────────────────
       - name: Install NemoClaw
         env:
           NEMOCLAW_INSTALL_TAG: lkg
           NEMOCLAW_NON_INTERACTIVE: "true"
           NEMOCLAW_AGENT: hermes
-          NEMOCLAW_DEFER_ONBOARDING: "true"
+          NEMOCLAW_DEFER_ONBOARDING: "1"
           NEMOCLAW_ACCEPT_THIRD_PARTY_SOFTWARE: "1"
-          NVIDIA_INFERENCE_API_KEY: ${{ secrets.NGC_API_KEY }}"
         run: |
-          curl -fsSL https://www.nvidia.com/nemoclaw.sh | bash
+          curl -fsSL https://www.nvidia.com/nemoclaw.sh | bash -s -- --defer-onboarding
 
       # ──────────────────────────────────────────────
       # 3. Prepare Traces (Hermes → NeMo Relay)
