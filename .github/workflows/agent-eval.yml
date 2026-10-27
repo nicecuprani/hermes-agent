@@ -56,6 +56,7 @@ jobs:
           NEMOCLAW_NON_INTERACTIVE: "true"
           NEMOCLAW_AGENT: hermes
           NEMOCLAW_DEFER_ONBOARDING: "true"
+          NEMOCLAW_ACCEPT_THIRD_PARTY_SOFTWARE: "1"
         run: |
           curl -fsSL https://www.nvidia.com/nemoclaw.sh | bash
 
