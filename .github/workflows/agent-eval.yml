@@ -87,10 +87,17 @@ jobs:
 
       - name: Convert to NeMo Relay format
         run: |
-          python scripts/convert_hermes_traces.py \
-            --input ${{ env.TRACES_DIR }}/session_log.md \
-            --output ${{ env.TRACES_DIR }}/traces_nemo_relay.json \
-            --agent-id ${{ env.AGENT_ID }}
+          # Use synthetic traces if session_log.md doesn't exist (CI environment)
+          if [ -f "${{ env.TRACES_DIR }}/session_log.md" ]; then
+            python scripts/convert_hermes_traces.py \
+              --input ${{ env.TRACES_DIR }}/session_log.md \
+              --output ${{ env.TRACES_DIR }}/traces_nemo_relay.json \
+              --agent-id ${{ env.AGENT_ID }}
+          else
+            # Synthetic traces are already in NeMo Relay format
+            cp ${{ env.TRACES_DIR }}/synthetic_traces.json ${{ env.TRACES_DIR }}/traces_nemo_relay.json
+            echo "Using synthetic traces for NeMo Relay format"
+          fi
 
       # ──────────────────────────────────────────────
       # 4. NeMo Compass — Failure Analysis
